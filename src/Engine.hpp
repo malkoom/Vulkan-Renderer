@@ -13,7 +13,10 @@ import vulkan_hpp;
 #endif
 
 #include <GLFW/glfw3.h>
+
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 // Includes de mi propio motor
 #include "Vertex.hpp"
@@ -86,6 +89,11 @@ private:
     vk::raii::ImageView m_TextureImageView = nullptr;
     vk::raii::Sampler m_TextureSampler = nullptr;
 
+    // Depth buffering
+    vk::raii::Image        m_DepthImage       = nullptr;
+    vk::raii::DeviceMemory m_DepthImageMemory = nullptr;
+    vk::raii::ImageView    m_DepthImageView   = nullptr;
+
     // Infraestructura de Comandos y Sincronización
     vk::raii::CommandPool m_CommandPool = nullptr;
     std::vector<vk::raii::CommandBuffer> m_CommandBuffers;
@@ -95,15 +103,14 @@ private:
     uint32_t m_FrameIndex = 0;
 
     // Datos estáticos de la escena
-    const std::vector<Vertex> m_Vertices = {
-        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
-    };
-    const std::vector<uint16_t> m_Indices = {
-        0, 1, 2, 2, 3, 0
-    };
+    std::vector<Vertex> m_Vertices;
+    std::vector<uint32_t> m_Indices;
+
+    //3D Models
+    const uint32_t WIDTH                = 800;
+    const uint32_t HEIGHT               = 600;
+    const std::string  MODEL_PATH           = "assets/models/viking_room.obj";
+    const std::string  TEXTURE_PATH         = "assets/textures/viking_room.png";
 
     // Funciones de Inicialización y Ciclo de vida
     void initWindow();
@@ -147,14 +154,21 @@ private:
     void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size);
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 
-    // Recursos de Texturizado e Imágenes
+    // Modelod 3D
+    void loadModel();
+
+    // Recursos de Texturizado, Imágenes y Depth Buffer
     void createTextureImage();
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
         uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
     void copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height);
     void createTextureImageView();
-    vk::raii::ImageView createImageView(vk::Image const &image, vk::Format format);
+    vk::raii::ImageView createImageView(vk::Image const &image, vk::Format format, vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor);
     void createTextureSampler();
+    void createDepthResources();
+    vk::Format findDepthFormat();
+    vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features);
+
 
     // Descriptores (UBO & Sampler)
     void createDescriptorSetLayout();
@@ -172,13 +186,14 @@ private:
 
     // Sincronización de Layouts de imágenes (Barriers)
     void transition_image_layout(
-        uint32_t imageIndex,
+        vk::Image image,
         vk::ImageLayout old_layout,
         vk::ImageLayout new_layout,
         vk::AccessFlags2 src_access_mask,
         vk::AccessFlags2 dst_access_mask,
         vk::PipelineStageFlags2 src_stage_mask,
-        vk::PipelineStageFlags2 dst_stage_mask);
+        vk::PipelineStageFlags2 dst_stage_mask,
+        vk::ImageAspectFlags    image_aspect_flags);
 
     void transitionImageLayout(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Image &image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout);
     void createSyncronizationObjetcs();

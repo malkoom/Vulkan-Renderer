@@ -83,10 +83,12 @@ add_executable (${TEMPLATE_NAME}
         src/Vertex.hpp
         src/Engine.cpp
         src/Engine.hpp
-        src/main.cpp)
+        src/main.cpp
+)
+
 set_target_properties (${TEMPLATE_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TEMPLATE_DIR})
 set_target_properties (${TEMPLATE_NAME} PROPERTIES CXX_STANDARD 20)
-target_link_libraries (${TEMPLATE_NAME} Vulkan::cppm glfw)
+target_link_libraries (${TEMPLATE_NAME} Vulkan::cppm glfw tinyobjloader::tinyobjloader)
 target_include_directories (${TEMPLATE_NAME} PRIVATE ${STB_INCLUDEDIR})
 
 # Add compile definition if C++ 20 module is enabled
@@ -122,14 +124,13 @@ add_custom_target(${SHADER_TARGET} DEPENDS ${SHADERS_DIR}/slang.spv)
 add_dependencies(${TEMPLATE_NAME} ${SHADER_TARGET})
 
 # Assets
-#set (ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../assets/")
-#file (COPY ${ASSET_DIR}/viking_room.obj DESTINATION ${TEMPLATE_DIR}/models)
-#file (COPY ${ASSET_DIR}/viking_room.png DESTINATION ${TEMPLATE_DIR}/textures)
+set (ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/")
+file(COPY "${ASSET_DIR}/" DESTINATION ${TEMPLATE_DIR}/assets)
 
 # Copiar la carpeta de texturas al directorio de salida del binario
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/textures"
-        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/textures"
-        COMMENT "Copiando texturas al directorio del ejecutable..."
-)
+#add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+#        COMMAND ${CMAKE_COMMAND} -E copy_directory
+#        "${CMAKE_CURRENT_SOURCE_DIR}/textures"
+#        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/textures"
+#        COMMENT "Copiando texturas al directorio del ejecutable..."
+#)
