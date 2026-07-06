@@ -84,10 +84,13 @@ private:
     std::vector<vk::raii::DescriptorSet> m_DescriptorSets;
 
     // Texturas de la GPU
+    uint32_t m_MipLevels = 0;
     vk::raii::Image        m_TextureImage       = nullptr;
     vk::raii::DeviceMemory m_TextureImageMemory = nullptr;
     vk::raii::ImageView m_TextureImageView = nullptr;
     vk::raii::Sampler m_TextureSampler = nullptr;
+    vk::SampleCountFlagBits m_MSaaSamples = vk::SampleCountFlagBits::e1;
+
 
     // Depth buffering
     vk::raii::Image        m_DepthImage       = nullptr;
@@ -153,17 +156,20 @@ private:
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties);
     void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size);
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
+    vk::SampleCountFlagBits getMaxUsableSampleCount();
 
     // Modelod 3D
     void loadModel();
 
     // Recursos de Texturizado, Imágenes y Depth Buffer
     void createTextureImage();
+    void generateMipmaps(
+        vk::raii::CommandBuffer &commandBuffer, vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
-        uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
+        uint32_t width, uint32_t height, uint32_t mipLevels, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
     void copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height);
     void createTextureImageView();
-    vk::raii::ImageView createImageView(vk::Image const &image, vk::Format format, vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor);
+    vk::raii::ImageView createImageView(vk::Image const &image, uint32_t mipLevels, vk::Format format, vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor);
     void createTextureSampler();
     void createDepthResources();
     vk::Format findDepthFormat();
@@ -195,7 +201,7 @@ private:
         vk::PipelineStageFlags2 dst_stage_mask,
         vk::ImageAspectFlags    image_aspect_flags);
 
-    void transitionImageLayout(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Image &image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout);
+    void transitionImageLayout(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Image &image, uint32_t mipLevels, vk::ImageLayout oldLayout, vk::ImageLayout newLayout);
     void createSyncronizationObjetcs();
 
     // Helpers
