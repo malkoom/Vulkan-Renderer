@@ -70,6 +70,7 @@ void Engine::initVulkan()
     createDescriptorSetLayout();
     createGraphicsPipeline();
     createCommandPool();
+    createColorResources();
     createDepthResources();
     createTextureImage();
     createTextureImageView();
@@ -366,6 +367,7 @@ void Engine::recreateSwapChain()
     cleanupSwapChain();
     createSwapChain();
     createImageViews();
+    createColorResources();
     createDepthResources();
 }
 
@@ -415,7 +417,7 @@ void Engine::createGraphicsPipeline()
                                                         .depthBiasEnable         = vk::False,
                                                         .lineWidth               = 1.0f};
 
-    vk::PipelineMultisampleStateCreateInfo multisampling{.rasterizationSamples = vk::SampleCountFlagBits::e1, .sampleShadingEnable = vk::False};
+    vk::PipelineMultisampleStateCreateInfo multisampling{.rasterizationSamples = m_MSaaSamples, .sampleShadingEnable = vk::False};
 
     // Blending (1 - alpha)
     vk::PipelineColorBlendAttachmentState colorBlendAttachment{
@@ -638,7 +640,7 @@ void Engine::recordCommandBuffer(uint32_t imageIndex)
     auto &commandBuffer = m_CommandBuffers[m_FrameIndex];
     commandBuffer.begin({});
 
-    // Before starting rendering, transition the swapchain image to vk::ImageLayout::eColorAttachmentOptimal
+    // Before starting rendering, transition the swapchain image to COLOR_ATTACHMENT_OPTIMAL
     transition_image_layout(
         m_SwapChainImages[imageIndex],
         vk::ImageLayout::eUndefined,
@@ -646,11 +648,19 @@ void Engine::recordCommandBuffer(uint32_t imageIndex)
         {},                                                        // srcAccessMask (no need to wait for previous operations)
         vk::AccessFlagBits2::eColorAttachmentWrite,                // dstAccessMask
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // srcStage
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,         // dstStage
-        vk::ImageAspectFlagBits::eColor
-    );
-
-    // Transition depth image to depth attachment optimal layout
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // dstStage
+        vk::ImageAspectFlagBits::eColor);
+    // Transition the multisampled color image to COLOR_ATTACHMENT_OPTIMAL
+    transition_image_layout(
+        *m_ColorImage,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::ImageAspectFlagBits::eColor);
+    // Transition the depth image to DEPTH_ATTACHMENT_OPTIMAL
     transition_image_layout(
         *m_DepthImage,
         vk::ImageLayout::eUndefined,
@@ -665,11 +675,15 @@ void Engine::recordCommandBuffer(uint32_t imageIndex)
     vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
     vk::RenderingAttachmentInfo colorAttachmentInfo = {
-        .imageView   = m_SwapChainImageViews[imageIndex],
+        .imageView   = m_ColorImageView,
         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .resolveMode = vk::ResolveModeFlagBits::eAverage,
+        .resolveImageView = m_SwapChainImageViews[imageIndex],
+        .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
         .loadOp      = vk::AttachmentLoadOp::eClear,
         .storeOp     = vk::AttachmentStoreOp::eStore,
-        .clearValue  = clearColor};
+        .clearValue  = clearColor
+    };
 
     vk::RenderingAttachmentInfo depthAttachmentInfo = {
         .imageView   = m_DepthImageView,
@@ -810,6 +824,7 @@ void Engine::createTextureImage()
                                                                 texWidth,
                                                                 texHeight,
                                                                 m_MipLevels,
+                                                                vk::SampleCountFlagBits::e1,
                                                                 vk::Format::eR8G8B8A8Srgb,
                                                                 vk::ImageTiling::eOptimal,
                                                                 vk::ImageUsageFlagBits::eTransferDst |
@@ -904,14 +919,14 @@ void Engine::generateMipmaps(vk::raii::CommandBuffer &commandBuffer,
 }
 
 std::pair<vk::raii::Image, vk::raii::DeviceMemory> Engine::createImage(
-    uint32_t width, uint32_t height, uint32_t mipLevels, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties )
+    uint32_t width, uint32_t height, uint32_t mipLevels, vk::SampleCountFlagBits numSamples, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties )
 {
     vk::ImageCreateInfo imageInfo{.imageType   = vk::ImageType::e2D,
                                   .format      = format,
                                   .extent      = {width, height, 1},
                                   .mipLevels   = mipLevels,
                                   .arrayLayers = 1,
-                                  .samples     = vk::SampleCountFlagBits::e1,
+                                  .samples     = numSamples,
                                   .tiling      = tiling,
                                   .usage       = usage,
                                   .sharingMode = vk::SharingMode::eExclusive};
@@ -977,7 +992,7 @@ void Engine::createTextureSampler()
 void Engine::createDepthResources()
 {
     vk::Format depthFormat = findDepthFormat();
-    std::tie(m_DepthImage, m_DepthImageMemory) = createImage(m_SwapChainExtent.width, m_SwapChainExtent.height, 1, depthFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    std::tie(m_DepthImage, m_DepthImageMemory) = createImage(m_SwapChainExtent.width, m_SwapChainExtent.height, 1, m_MSaaSamples, depthFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal);
     m_DepthImageView = createImageView(*m_DepthImage, 1, depthFormat, vk::ImageAspectFlagBits::eDepth);
 }
 
@@ -1015,6 +1030,14 @@ vk::Format Engine::findSupportedFormat(const std::vector<vk::Format>& candidates
     }
 
     throw std::runtime_error("failed to find supported format!");
+}
+
+void Engine::createColorResources()
+{
+    vk::Format colorFormat = m_SwapChainSurfaceFormat.format;
+
+    std::tie(m_ColorImage, m_ColorImageMemory) = createImage(m_SwapChainExtent.width, m_SwapChainExtent.height, 1, m_MSaaSamples, colorFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eColorAttachment,  vk::MemoryPropertyFlagBits::eDeviceLocal);
+    m_ColorImageView = createImageView(m_ColorImage, 1, colorFormat, vk::ImageAspectFlagBits::eColor);
 }
 
 void Engine::createSyncronizationObjetcs()

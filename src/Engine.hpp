@@ -76,6 +76,11 @@ private:
     vk::raii::Buffer       m_IndexBuffer        = nullptr;
     vk::raii::DeviceMemory m_IndexBufferMemory  = nullptr;
 
+    // MSAA buffers
+    vk::raii::Image m_ColorImage = nullptr;
+    vk::raii::DeviceMemory m_ColorImageMemory = nullptr;
+    vk::raii::ImageView m_ColorImageView = nullptr;
+
     // Uniform Buffers (UBO)
     std::vector<vk::raii::Buffer>       m_UniformBuffers;
     std::vector<vk::raii::DeviceMemory> m_UniformBuffersMemory;
@@ -158,7 +163,7 @@ private:
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
     vk::SampleCountFlagBits getMaxUsableSampleCount();
 
-    // Modelod 3D
+    // Modelos 3D
     void loadModel();
 
     // Recursos de Texturizado, Imágenes y Depth Buffer
@@ -166,7 +171,7 @@ private:
     void generateMipmaps(
         vk::raii::CommandBuffer &commandBuffer, vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
-        uint32_t width, uint32_t height, uint32_t mipLevels, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
+        uint32_t width, uint32_t height, uint32_t mipLevels, vk::SampleCountFlagBits numSamples, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
     void copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height);
     void createTextureImageView();
     vk::raii::ImageView createImageView(vk::Image const &image, uint32_t mipLevels, vk::Format format, vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor);
@@ -175,6 +180,8 @@ private:
     vk::Format findDepthFormat();
     vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features);
 
+    // MSAA
+    void createColorResources();
 
     // Descriptores (UBO & Sampler)
     void createDescriptorSetLayout();
