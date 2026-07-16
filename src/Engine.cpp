@@ -7,11 +7,9 @@
 #include <fstream>
 #include <stdexcept>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-
-#define TINYOBJLOADER_IMPLEMENTATION
-#include <tiny_obj_loader.h>
+#include <stb/stb_image.h>
+#include <ktx.h>
+#include <tiny_gltf.h>
 
 const char* IMAGE_PATH = "/assets/textures/image.jpg";
 
@@ -515,7 +513,7 @@ void Engine::createUniformBuffers()
     }
 }
 
-std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> Engine::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties)
+[[nodiscard]] std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> Engine::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties)
 {
     vk::BufferCreateInfo   bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
     vk::raii::Buffer       buffer          = vk::raii::Buffer(m_LogicalDevice, bufferInfo);
@@ -764,14 +762,16 @@ void Engine::transition_image_layout(
     m_CommandBuffers[m_FrameIndex].pipelineBarrier2(dependencyInfo);
 }
 
-void Engine::transitionImageLayout(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Image &image, uint32_t mipLevels,vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+void Engine::transitionImageLayout(const vk::raii::Image &image,vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
 {
-    vk::ImageMemoryBarrier barrier{.oldLayout           = oldLayout,
-                                   .newLayout           = newLayout,
-                                   .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-                                   .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-                                   .image               = image,
-                                   .subresourceRange    = {.aspectMask = vk::ImageAspectFlagBits::eColor, .levelCount = mipLevels, .layerCount = 1}};
+    auto commandBuffer = beginSingleTimeCommands();
+
+    vk::ImageMemoryBarrier barrier{
+        .oldLayout        = oldLayout,
+        .newLayout        = newLayout,
+        .image            = *image,
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, m_MipLevels, 0, 1}
+    };
 
     vk::PipelineStageFlags sourceStage;
     vk::PipelineStageFlags destinationStage;
@@ -796,58 +796,61 @@ void Engine::transitionImageLayout(vk::raii::CommandBuffer &commandBuffer, const
     {
         throw std::invalid_argument("unsupported layout transition!");
     }
-    commandBuffer.pipelineBarrier(    sourceStage, destinationStage, {}, {}, nullptr, barrier);
+    commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, {}, nullptr, barrier);
+    endSingleTimeCommands(std::move(commandBuffer));
 }
 
 void Engine::createTextureImage()
 {
-    int            texWidth, texHeight, texChannels;
-    stbi_uc       *pixels    = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    m_MipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+    int           texWidth, texHeight, texChannels;
+    stbi_uc      *pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     vk::DeviceSize imageSize = texWidth * texHeight * 4;
+
+    // CORREGIDO: Asignamos el valor directamente a la variable de la clase (m_MipLevels)
+    m_MipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
 
     if (!pixels)
     {
         throw std::runtime_error("failed to load texture image!");
     }
 
-    auto [stagingBuffer, stagingBufferMemory] =
-    createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    vk::raii::Buffer       stagingBuffer       = nullptr;
+    vk::raii::DeviceMemory stagingBufferMemory = nullptr;
 
-    void* data = stagingBufferMemory.mapMemory(0, imageSize);
-    memcpy(data, pixels, imageSize);
+    std::tie(stagingBuffer, stagingBufferMemory) = createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    void *data = stagingBufferMemory.mapMemory(0, imageSize);
+    memcpy(data, pixels, static_cast<size_t>(imageSize));
     stagingBufferMemory.unmapMemory();
 
     stbi_image_free(pixels);
 
+    // CORREGIDO: Usamos m_MipLevels en la creación de la imagen física
     std::tie(m_TextureImage, m_TextureImageMemory) = createImage(
-                                                                texWidth,
-                                                                texHeight,
-                                                                m_MipLevels,
-                                                                vk::SampleCountFlagBits::e1,
-                                                                vk::Format::eR8G8B8A8Srgb,
-                                                                vk::ImageTiling::eOptimal,
-                                                                vk::ImageUsageFlagBits::eTransferDst |
-                                                                vk::ImageUsageFlagBits::eSampled |
-                                                                vk::ImageUsageFlagBits::eTransferSrc,
-                                                                vk::MemoryPropertyFlagBits::eDeviceLocal);
+        texWidth, texHeight, m_MipLevels, vk::SampleCountFlagBits::e1,
+        vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+        vk::MemoryPropertyFlagBits::eDeviceLocal
+    );
 
-    vk::raii::CommandBuffer commandBuffer = beginSingleTimeCommands();
-    transitionImageLayout(commandBuffer, m_TextureImage, m_MipLevels, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-    copyBufferToImage(commandBuffer, stagingBuffer, m_TextureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-    generateMipmaps(commandBuffer, m_TextureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, m_MipLevels);
+    // Ahora transitionImageLayout leerá m_MipLevels correctamente y abarcará toda la pirámide
+    transitionImageLayout(m_TextureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
+    copyBufferToImage(stagingBuffer, m_TextureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
 
-    endSingleTimeCommands(std::move(commandBuffer));
+    // CORREGIDO: Pasamos m_MipLevels al generador de mipmaps
+    generateMipmaps(m_TextureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, m_MipLevels);
 }
 
-void Engine::generateMipmaps(vk::raii::CommandBuffer &commandBuffer,
+void Engine::generateMipmaps(
                      vk::raii::Image         &image,
                      vk::Format               imageFormat,
                      int32_t                  texWidth,
                      int32_t                  texHeight,
                      uint32_t                 mipLevels)
 {
+    auto commandBuffer = beginSingleTimeCommands();
+
     vk::FormatProperties formatProperties = m_PhysicalDevice.getFormatProperties(imageFormat);
 
     if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))
@@ -916,9 +919,11 @@ void Engine::generateMipmaps(vk::raii::CommandBuffer &commandBuffer,
     barrier.dstAccessMask                 = vk::AccessFlagBits::eShaderRead;
 
     commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, barrier);
+
+    endSingleTimeCommands(std::move(commandBuffer));
 }
 
-std::pair<vk::raii::Image, vk::raii::DeviceMemory> Engine::createImage(
+[[nodiscard]]std::pair<vk::raii::Image, vk::raii::DeviceMemory> Engine::createImage(
     uint32_t width, uint32_t height, uint32_t mipLevels, vk::SampleCountFlagBits numSamples, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties )
 {
     vk::ImageCreateInfo imageInfo{.imageType   = vk::ImageType::e2D,
@@ -942,8 +947,9 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> Engine::createImage(
     return {std::move(image), std::move(imageMemory)};
 }
 
-void Engine::copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height)
+void Engine::copyBufferToImage(const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height)
 {
+    auto commandBuffer = beginSingleTimeCommands();
     vk::BufferImageCopy region{.bufferOffset      = 0,
                                .bufferRowLength   = 0,
                                .bufferImageHeight = 0,
@@ -951,6 +957,7 @@ void Engine::copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk:
                                .imageOffset       = {0, 0, 0},
                                .imageExtent       = {width, height, 1}};
     commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
+    endSingleTimeCommands(std::move(commandBuffer));
 }
 
 void Engine::createTextureImageView()
@@ -1170,35 +1177,136 @@ void Engine::cleanup()
 
 void Engine::loadModel()
 {
-    tinyobj::attrib_t                attrib;
-    std::vector<tinyobj::shape_t>    shapes;
-    std::vector<tinyobj::material_t> materials;
-    std::string                      warn, err;
+     // Use tinygltf to load the model instead of tinyobjloader
+    tinygltf::Model    model;
+    tinygltf::TinyGLTF loader;
+    std::string        err;
+    std::string        warn;
 
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+    bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, MODEL_PATH);
+
+    if (!warn.empty())
     {
-        throw std::runtime_error(warn + err);
+        std::cout << "glTF warning: " << warn << std::endl;
     }
 
-    for (const auto& shape : shapes)
+    if (!err.empty())
     {
-        for (const auto& index : shape.mesh.indices)
+        std::cout << "glTF error: " << err << std::endl;
+    }
+
+    if (!ret)
+    {
+        throw std::runtime_error("Failed to load glTF model");
+    }
+
+    m_Vertices.clear();
+    m_Indices.clear();
+
+    // Process all meshes in the model
+    for (const auto &mesh : model.meshes)
+    {
+        for (const auto &primitive : mesh.primitives)
         {
-            Vertex vertex{};
+            // Get indices
+            const tinygltf::Accessor   &indexAccessor   = model.accessors[primitive.indices];
+            const tinygltf::BufferView &indexBufferView = model.bufferViews[indexAccessor.bufferView];
+            const tinygltf::Buffer     &indexBuffer     = model.buffers[indexBufferView.buffer];
 
-            vertex.Pos = {
-                attrib.vertices[3 * index.vertex_index + 0],
-                attrib.vertices[3 * index.vertex_index + 1],
-                attrib.vertices[3 * index.vertex_index + 2]};
+            // Get vertex positions
+            const tinygltf::Accessor   &posAccessor   = model.accessors[primitive.attributes.at("POSITION")];
+            const tinygltf::BufferView &posBufferView = model.bufferViews[posAccessor.bufferView];
+            const tinygltf::Buffer     &posBuffer     = model.buffers[posBufferView.buffer];
 
-            vertex.TexCoord = {
-                attrib.texcoords[2 * index.texcoord_index + 0],
-                1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
+            // Get texture coordinates if available
+            bool                        hasTexCoords       = primitive.attributes.find("TEXCOORD_0") != primitive.attributes.end();
+            const tinygltf::Accessor   *texCoordAccessor   = nullptr;
+            const tinygltf::BufferView *texCoordBufferView = nullptr;
+            const tinygltf::Buffer     *texCoordBuffer     = nullptr;
 
-            vertex.Color = {1.0f, 1.0f, 1.0f};
+            if (hasTexCoords)
+            {
+                texCoordAccessor   = &model.accessors[primitive.attributes.at("TEXCOORD_0")];
+                texCoordBufferView = &model.bufferViews[texCoordAccessor->bufferView];
+                texCoordBuffer     = &model.buffers[texCoordBufferView->buffer];
+            }
 
-            m_Vertices.push_back(vertex);
-            m_Indices.push_back(m_Indices.size());
+            uint32_t baseVertex = static_cast<uint32_t>(    m_Vertices.size());
+
+            for (size_t i = 0; i < posAccessor.count; i++)
+            {
+                Vertex vertex{};
+
+                const float *pos = reinterpret_cast<const float *>(&posBuffer.data[posBufferView.byteOffset + posAccessor.byteOffset + i * 12]);
+                // glTF uses a right-handed coordinate system with Y-up
+                // Vulkan uses a right-handed coordinate system with Y-down
+                // We need to flip the Y coordinate
+                vertex.Pos = {pos[0], -pos[1], pos[2]};
+
+                if (hasTexCoords)
+                {
+                    const float *texCoord = reinterpret_cast<const float *>(&texCoordBuffer->data[texCoordBufferView->byteOffset + texCoordAccessor->byteOffset + i * 8]);
+                    vertex.TexCoord       = {texCoord[0], texCoord[1]};
+                }
+                else
+                {
+                    vertex.TexCoord = {0.0f, 0.0f};
+                }
+
+                vertex.Color = {1.0f, 1.0f, 1.0f};
+
+                m_Vertices.push_back(vertex);
+            }
+
+            const unsigned char *indexData   = &indexBuffer.data[indexBufferView.byteOffset + indexAccessor.byteOffset];
+            size_t               indexCount  = indexAccessor.count;
+            size_t               indexStride = 0;
+
+            // Determine index stride based on component type
+            if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+            {
+                indexStride = sizeof(uint16_t);
+            }
+            else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
+            {
+                indexStride = sizeof(uint32_t);
+            }
+            else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+            {
+                indexStride = sizeof(uint8_t);
+            }
+            else
+            {
+                throw std::runtime_error("Unsupported index component type");
+            }
+
+            m_Indices.reserve(m_Indices.size() + indexCount);
+
+            for (size_t i = 0; i < indexCount; i += 3) {
+                uint32_t idx0 = 0, idx1 = 0, idx2 = 0;
+
+                if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                    idx0 = *reinterpret_cast<const uint16_t *>(indexData + (i + 0) * indexStride);
+                    idx1 = *reinterpret_cast<const uint16_t *>(indexData + (i + 1) * indexStride);
+                    idx2 = *reinterpret_cast<const uint16_t *>(indexData + (i + 2) * indexStride);
+                }
+                else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+                    idx0 = *reinterpret_cast<const uint32_t *>(indexData + (i + 0) * indexStride);
+                    idx1 = *reinterpret_cast<const uint32_t *>(indexData + (i + 1) * indexStride);
+                    idx2 = *reinterpret_cast<const uint32_t *>(indexData + (i + 2) * indexStride);
+                }
+                else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                    idx0 = *reinterpret_cast<const uint8_t *>(indexData + (i + 0) * indexStride);
+                    idx1 = *reinterpret_cast<const uint8_t *>(indexData + (i + 1) * indexStride);
+                    idx2 = *reinterpret_cast<const uint8_t *>(indexData + (i + 2) * indexStride);
+                }
+
+                // En lugar de meter 0, 1, 2... metemos 0, 2, 1.
+                // Esto invierte la dirección de la normal del triángulo para el Rasterizador de Vulkan.
+                m_Indices.push_back(baseVertex + idx0);
+                m_Indices.push_back(baseVertex + idx2); // <-- Intercambiado
+                m_Indices.push_back(baseVertex + idx1); // <-- Intercambiado
+            }
         }
     }
 }

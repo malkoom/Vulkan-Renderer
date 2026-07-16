@@ -16,11 +16,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
-#find_package(Vulkan 1.4.335 REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(tinyobjloader REQUIRED)
 find_package(tinygltf REQUIRED)
-find_package(KTX REQUIRED)
+find_package(KTX REQUIRED) # <-- El paquete se encuentra correctamente aquí
 
 # Set up Vulkan C++ module only if enabled
 if(ENABLE_CPP20_MODULE)
@@ -33,41 +32,38 @@ if(ENABLE_CPP20_MODULE)
 
   set_target_properties(VulkanCppModule PROPERTIES CXX_STANDARD 20)
 
-  # Add MSVC-specific compiler options for proper C++ module support
   if(MSVC)
     target_compile_options(VulkanCppModule PRIVATE
-      /std:c++latest      # Use latest C++ standard for better module support
-      /permissive-        # Standards conformance mode
-      /Zc:__cplusplus     # Enable correct __cplusplus macro
-      /EHsc               # Enable C++ exception handling
-      /Zc:preprocessor    # Use conforming preprocessor
-      /translateInclude   # Automatically translate #include to import for standard library
+            /std:c++latest
+            /permissive-
+            /Zc:__cplusplus
+            /EHsc
+            /Zc:preprocessor
+            /translateInclude
     )
   endif()
 
   target_sources(VulkanCppModule
-    PUBLIC
-    FILE_SET cxx_modules TYPE CXX_MODULES
-    BASE_DIRS
-    "${Vulkan_INCLUDE_DIR}"
-    FILES
-    "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
+          PUBLIC
+          FILE_SET cxx_modules TYPE CXX_MODULES
+          BASE_DIRS
+          "${Vulkan_INCLUDE_DIR}"
+          FILES
+          "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
   )
 
-
-  # Add the vulkan.cppm file directly as a source file
   target_sources(VulkanCppModule
-    PRIVATE
-    "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
+          PRIVATE
+          "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
   )
 else()
-  # Create a dummy interface library when C++ 20 module is disabled
+  # CORREGIDO: Una librería INTERFACE no debe listar archivos fuente aquí
   add_library(VulkanCppModule INTERFACE
-          src/main.cpp)
+          src/MacrosImplementation.cpp)
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
   target_link_libraries(VulkanCppModule INTERFACE Vulkan::Vulkan)
   target_compile_definitions(VulkanCppModule
-    INTERFACE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+          INTERFACE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
   )
 endif()
 
@@ -78,18 +74,32 @@ find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
 
 set(TEMPLATE_DIR ${CMAKE_BINARY_DIR}/${TEMPLATE_NAME})
 
+# CORREGIDO: Eliminado main.cpp duplicado y añadido StbImplementation.cpp
 add_executable (${TEMPLATE_NAME}
         src/main.cpp
         src/Vertex.hpp
         src/Engine.cpp
         src/Engine.hpp
-        src/main.cpp
+        src/MacrosImplementation.cpp
 )
 
 set_target_properties (${TEMPLATE_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TEMPLATE_DIR})
 set_target_properties (${TEMPLATE_NAME} PROPERTIES CXX_STANDARD 20)
-target_link_libraries (${TEMPLATE_NAME} Vulkan::cppm glfw tinyobjloader::tinyobjloader)
-target_include_directories (${TEMPLATE_NAME} PRIVATE ${STB_INCLUDEDIR})
+
+# CORREGIDO: Añadido el target de KTX (KTX::ktx) para que el linker lo encuentre
+target_link_libraries (${TEMPLATE_NAME}
+        Vulkan::cppm
+        glfw
+        tinyobjloader::tinyobjloader
+        KTX::ktx
+)
+
+# CORREGIDO: Añadido el directorio de includes de tinyobjloader y KTX si el sistema lo requiere
+target_include_directories (${TEMPLATE_NAME} PRIVATE
+        ${STB_INCLUDEDIR}
+        ${tinyobjloader_INCLUDE_DIRS}
+        ${KTX_INCLUDE_DIRS}
+)
 
 # Add compile definition if C++ 20 module is enabled
 if(ENABLE_CPP20_MODULE)
@@ -108,17 +118,16 @@ endif()
 # Slang shader
 set (SHADER_TARGET ${TEMPLATE_NAME}Shader)
 set (SHADERS_DIR ${TEMPLATE_DIR}/shaders)
-set (SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shaders
-/shader.slang")
+set (SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang")
 set (ENTRY_POINTS -entry vertMain -entry fragMain)
 add_custom_command(OUTPUT ${SHADERS_DIR} COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR})
 add_custom_command(
-  OUTPUT  ${SHADERS_DIR}/slang.spv
-  COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o ${TEMPLATE_DIR}/shaders/slang.spv
-  WORKING_DIRECTORY ${SHADERS_DIR}
-  DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
-  COMMENT "Compiling Slang Shaders"
-  VERBATIM
+        OUTPUT  ${SHADERS_DIR}/slang.spv
+        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o ${TEMPLATE_DIR}/shaders/slang.spv
+        WORKING_DIRECTORY ${SHADERS_DIR}
+        DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
+        COMMENT "Compiling Slang Shaders"
+        VERBATIM
 )
 add_custom_target(${SHADER_TARGET} DEPENDS ${SHADERS_DIR}/slang.spv)
 add_dependencies(${TEMPLATE_NAME} ${SHADER_TARGET})
@@ -126,11 +135,3 @@ add_dependencies(${TEMPLATE_NAME} ${SHADER_TARGET})
 # Assets
 set (ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/")
 file(COPY "${ASSET_DIR}/" DESTINATION ${TEMPLATE_DIR}/assets)
-
-# Copiar la carpeta de texturas al directorio de salida del binario
-#add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-#        COMMAND ${CMAKE_COMMAND} -E copy_directory
-#        "${CMAKE_CURRENT_SOURCE_DIR}/textures"
-#        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/textures"
-#        COMMENT "Copiando texturas al directorio del ejecutable..."
-#)
