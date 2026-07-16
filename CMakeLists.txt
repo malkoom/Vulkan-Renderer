@@ -59,7 +59,9 @@ if(ENABLE_CPP20_MODULE)
 else()
   # CORREGIDO: Una librería INTERFACE no debe listar archivos fuente aquí
   add_library(VulkanCppModule INTERFACE
-          src/MacrosImplementation.cpp)
+          src/MacrosImplementation.cpp
+          src/GameObject.cpp
+          src/GameObject.hpp)
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
   target_link_libraries(VulkanCppModule INTERFACE Vulkan::Vulkan)
   target_compile_definitions(VulkanCppModule

@@ -6,6 +6,8 @@
 #include <array>
 #include <iostream>
 
+#include "GameObject.hpp"
+
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #   include <vulkan/vulkan_raii.hpp>
 #else
@@ -120,6 +122,9 @@ private:
     const std::string  MODEL_PATH           = "assets/models/viking_room.gltf";
     const std::string  TEXTURE_PATH         = "assets/textures/viking_room.png";
 
+    // GameObjects
+    std::array<GameObject, 3> m_GameObjects;
+
     // Funciones de Inicialización y Ciclo de vida
     void initWindow();
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
@@ -165,6 +170,9 @@ private:
 
     // Modelos 3D
     void loadModel();
+
+    // GameObjects
+    void setupGameObjects();
 
     // Recursos de Texturizado, Imágenes y Depth Buffer
     void createTextureImage();
