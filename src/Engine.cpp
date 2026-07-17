@@ -1,4 +1,5 @@
 #include "Engine.hpp"
+#include "services/GraphicsServices.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -73,6 +74,9 @@ void Engine::initVulkan()
     createTextureImage();
     createTextureImageView();
     createTextureSampler();
+
+    GraphicsServices::RegisterServices(m_PhysicalDevice, m_LogicalDevice, m_CommandPool, m_GraphicsQueue);
+
     loadModel();
     setupGameObjects();
     createVertexBuffer();

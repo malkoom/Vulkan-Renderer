@@ -61,7 +61,11 @@ else()
   add_library(VulkanCppModule INTERFACE
           src/MacrosImplementation.cpp
           src/GameObject.cpp
-          src/GameObject.hpp)
+          src/GameObject.hpp
+          src/resources/Texture.cpp
+          src/resources/Texture.hpp
+          src/services/GraphicsServices.hpp
+          src/VulkanUtils.hpp)
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
   target_link_libraries(VulkanCppModule INTERFACE Vulkan::Vulkan)
   target_compile_definitions(VulkanCppModule
@@ -83,6 +87,13 @@ add_executable (${TEMPLATE_NAME}
         src/Engine.cpp
         src/Engine.hpp
         src/MacrosImplementation.cpp
+        src/components/Component.hpp
+        src/Entity.hpp
+        src/components/TransformComponent.hpp
+        src/resources/ResourceHandle.hpp
+        src/resources/Resource.hpp
+        src/resources/ResourceManager.hpp
+        src/VulkanUtils.cpp
 )
 
 set_target_properties (${TEMPLATE_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TEMPLATE_DIR})
