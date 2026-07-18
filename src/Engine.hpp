@@ -7,6 +7,9 @@
 #include <iostream>
 
 #include "GameObject.hpp"
+#include "resources/ResourceManager.hpp"
+#include "resources/ResourceHandle.hpp"
+#include "resources/Texture.hpp"
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #   include <vulkan/vulkan_raii.hpp>
@@ -90,12 +93,16 @@ private:
     vk::raii::DescriptorPool m_DescriptorPool = nullptr;
     std::vector<vk::raii::DescriptorSet> m_DescriptorSets;
 
+    // Manejo de recursos
+    ResourceManager m_ResourceManager;
+    ResourceHandle<Texture> m_Texture;
+
     // Texturas de la GPU
     uint32_t m_MipLevels = 1;
-    vk::raii::Image        m_TextureImage       = nullptr;
-    vk::raii::DeviceMemory m_TextureImageMemory = nullptr;
-    vk::raii::ImageView m_TextureImageView = nullptr;
-    vk::raii::Sampler m_TextureSampler = nullptr;
+    //vk::raii::Image        m_TextureImage       = nullptr;
+    //vk::raii::DeviceMemory m_TextureImageMemory = nullptr;
+    //vk::raii::ImageView m_TextureImageView = nullptr;
+    //vk::raii::Sampler m_TextureSampler = nullptr;
     vk::SampleCountFlagBits m_MSaaSamples = vk::SampleCountFlagBits::e1;
 
 
@@ -175,14 +182,15 @@ private:
     void setupGameObjects();
 
     // Recursos de Texturizado, Imágenes y Depth Buffer
-    void createTextureImage();
-    void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
+    void loadTexture();
+    //void createTextureImage();
+    //void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
         uint32_t width, uint32_t height, uint32_t mipLevels, vk::SampleCountFlagBits numSamples, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
     void copyBufferToImage(const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height);
-    void createTextureImageView();
+    //void createTextureImageView();
     vk::raii::ImageView createImageView(vk::Image const &image, uint32_t mipLevels, vk::Format format, vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor);
-    void createTextureSampler();
+    //void createTextureSampler();
     void createDepthResources();
     vk::Format findDepthFormat();
     vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features);

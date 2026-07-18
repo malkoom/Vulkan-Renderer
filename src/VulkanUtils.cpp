@@ -42,8 +42,20 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> VulkanUtils::CreateImage(uint
     return {std::move(image), std::move(imageMemory)};
 }
 
+vk::raii::ImageView VulkanUtils::CreateImageView(vk::Image const &image, uint32_t mipLevels, vk::Format format,
+    vk::ImageAspectFlags aspectFlags)
+{
+    vk::ImageViewCreateInfo viewInfo{
+        .image            = image,
+        .viewType         = vk::ImageViewType::e2D,
+        .format           = format,
+        .subresourceRange = {.aspectMask = aspectFlags, .baseMipLevel = 0, .levelCount = mipLevels, .baseArrayLayer = 0, .layerCount = 1}};
+
+    return vk::raii::ImageView(GraphicsServices::GetDevice(), viewInfo);
+}
+
 void VulkanUtils::TransitionImageLayout(const vk::raii::Image &image, vk::ImageLayout oldLayout,
-    vk::ImageLayout newLayout, uint32_t mipLevels)
+                                        vk::ImageLayout newLayout, uint32_t mipLevels)
 {
     auto commandBuffer = BeginSingleTimeCommands();
 
@@ -84,6 +96,15 @@ void VulkanUtils::TransitionImageLayout(const vk::raii::Image &image, vk::ImageL
 void VulkanUtils::CopyBufferToImage(const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width,
     uint32_t height)
 {
+    auto commandBuffer = VulkanUtils::BeginSingleTimeCommands();
+    vk::BufferImageCopy region{.bufferOffset      = 0,
+                               .bufferRowLength   = 0,
+                               .bufferImageHeight = 0,
+                               .imageSubresource  = {.aspectMask = vk::ImageAspectFlagBits::eColor, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
+                               .imageOffset       = {0, 0, 0},
+                               .imageExtent       = {width, height, 1}};
+    commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
+    VulkanUtils::EndSingleTimeCommands(std::move(commandBuffer));
 }
 
 vk::raii::CommandBuffer VulkanUtils::BeginSingleTimeCommands()

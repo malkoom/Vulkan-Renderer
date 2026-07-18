@@ -6,32 +6,45 @@
 #define VULKANENGINE_RESOURCEHANDLE_HPP
 
 #include <string>
-#include "../ResourceManager.hpp"
+#include "ResourceManager.hpp"
 
 // Resource handle
 template<typename T>
 class ResourceHandle {
 private:
-    std::string resourceId;
-    ResourceManager* resourceManager;
+    std::string m_ResourceId;
+    ResourceManager* m_ResourceManager;
 
 public:
-    ResourceHandle() : resourceManager(nullptr) {}
+    ResourceHandle() : m_ResourceId(""), m_ResourceManager(nullptr) {}
 
     ResourceHandle(const std::string& id, ResourceManager* manager)
-        : resourceId(id), resourceManager(manager) {}
+        : m_ResourceId(id), m_ResourceManager(manager) {}
+
+    ResourceHandle(const ResourceHandle& other)
+    {
+        m_ResourceId = other.m_ResourceId;
+        m_ResourceManager = other.m_ResourceManager;
+
+        // Si el handle copiado es válido, le decimos al manager que hay un interesado más
+        if (m_ResourceManager && !m_ResourceId.empty()) {
+            // Llamamos a Load<T> pasando el ID. Como el manager ya lo tiene en caché,
+            // simplemente incrementará el refCount interno y no volverá a cargar el archivo.
+            m_ResourceManager->Load<T>(m_ResourceId);
+        }
+    }
 
     T* Get() const {
-        if (!resourceManager) return nullptr;
-        return resourceManager->GetResource<T>(resourceId);
+        if (!m_ResourceManager) return nullptr;
+        return m_ResourceManager->GetResource<T>(m_ResourceId);
     }
 
     bool IsValid() const {
-        return resourceManager && resourceManager->HasResource<T>(resourceId);
+        return m_ResourceManager && m_ResourceManager->HasResource<T>(m_ResourceId);
     }
 
     const std::string& GetId() const {
-        return resourceId;
+        return m_ResourceId;
     }
 
     // Convenience operators

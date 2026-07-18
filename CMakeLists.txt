@@ -59,10 +59,8 @@ if(ENABLE_CPP20_MODULE)
 else()
   # CORREGIDO: Una librería INTERFACE no debe listar archivos fuente aquí
   add_library(VulkanCppModule INTERFACE
-          src/MacrosImplementation.cpp
           src/GameObject.cpp
           src/GameObject.hpp
-          src/resources/Texture.cpp
           src/resources/Texture.hpp
           src/services/GraphicsServices.hpp
           src/VulkanUtils.hpp)
@@ -93,6 +91,8 @@ add_executable (${TEMPLATE_NAME}
         src/resources/ResourceHandle.hpp
         src/resources/Resource.hpp
         src/resources/ResourceManager.hpp
+        src/resources/Texture.hpp
+        src/resources/Texture.cpp
         src/VulkanUtils.cpp
 )
 

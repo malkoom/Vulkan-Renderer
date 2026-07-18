@@ -26,6 +26,17 @@ unsigned char* Texture::LoadImageData(const std::string &filePath, int *width, i
 
 void Texture::CreateVulkanImage(unsigned char *pixels, int width, int height, int channels)
 {
+    // Implementation to create Vulkan image, allocate memory, and upload data
+    // This involves complex Vulkan operations including:
+    // - Format selection based on channel count and data type
+    // - Memory allocation with appropriate usage flags
+    // - Image creation with optimal tiling and layout
+    // - Data upload via staging buffers for efficiency
+    // - Image view creation for shader access
+    // - Sampler creation with appropriate filtering settings
+    // ...
+
+    // Creamos el staging buffer para pasarlo a memoria visible desde el host
     vk::DeviceSize imageSize = m_Width * m_Height * 4;
     vk::raii::Buffer       stagingBuffer       = nullptr;
     vk::raii::DeviceMemory stagingBufferMemory = nullptr;
@@ -36,9 +47,9 @@ void Texture::CreateVulkanImage(unsigned char *pixels, int width, int height, in
     memcpy(data, pixels, static_cast<size_t>(imageSize));
     stagingBufferMemory.unmapMemory();
 
-    stbi_image_free(data);
+    stbi_image_free(pixels);
 
-    // CORREGIDO: Usamos m_MipLevels en la creación de la imagen física
+    // Creamos la imagen real sobre la que se va a samplear en el shader
     std::tie(m_Image, m_Memory) = VulkanUtils::CreateImage(
         m_Width, m_Height, m_MipLevels, vk::SampleCountFlagBits::e1,
         vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
@@ -46,22 +57,38 @@ void Texture::CreateVulkanImage(unsigned char *pixels, int width, int height, in
         vk::MemoryPropertyFlagBits::eDeviceLocal
     );
 
-    // Ahora transitionImageLayout leerá m_MipLevels correctamente y abarcará toda la pirámide
+    // Transición a layout de transferencia óptima
     VulkanUtils::TransitionImageLayout(m_Image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, m_MipLevels);
 
+    // Copiamos el buffer a la imagen real
     VulkanUtils::CopyBufferToImage(stagingBuffer, m_Image, static_cast<uint32_t>(m_Width), static_cast<uint32_t>(m_Height));
 
+    // Generamos los mipmaps
     GenerateMipmaps(m_Image, vk::Format::eR8G8B8A8Srgb, m_Width, m_Height, m_MipLevels);
 
-    // Implementation to create Vulkan image, allocate memory, and upload data
-    // This involves complex Vulkan operations including:
-    // - Format selection based on channel count and data type
-    // - Memory allocation with appropriate usage flags
-    // - Image creation with optimal tiling and layout
-    // - Data upload via staging buffers for efficiency
-    // - Image view creation for shader access
-    // - Sampler creation with appropriate filtering settings
-    // ...
+    // Creamos la image view
+    m_ImageView = VulkanUtils::CreateImageView(*m_Image, m_MipLevels, vk::Format::eR8G8B8A8Srgb);
+
+    // Texture Sampler
+    vk::PhysicalDeviceProperties properties = GraphicsServices::GetPhysicalDevice().getProperties();
+
+    vk::SamplerCreateInfo        samplerInfo{
+        .magFilter        = vk::Filter::eLinear,
+        .minFilter        = vk::Filter::eLinear,
+        .mipmapMode       = vk::SamplerMipmapMode::eLinear,
+        .addressModeU     = vk::SamplerAddressMode::eRepeat,
+        .addressModeV     = vk::SamplerAddressMode::eRepeat,
+        .addressModeW     = vk::SamplerAddressMode::eRepeat,
+        .mipLodBias       = 0.0f,
+        .anisotropyEnable = vk::True,
+        .maxAnisotropy    = properties.limits.maxSamplerAnisotropy,
+        .compareEnable    = vk::False,
+        .compareOp        = vk::CompareOp::eAlways,
+        .minLod           = 0.0f,
+        .maxLod           = vk::LodClampNone};
+    m_Sampler = vk::raii::Sampler(GraphicsServices::GetDevice(), samplerInfo);
+
+
 }
 
 void Texture::GenerateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight,
@@ -144,7 +171,7 @@ void Texture::GenerateMipmaps(vk::raii::Image &image, vk::Format imageFormat, in
 bool Texture::doLoad()
 {
     // Step 2a: Construct file path using resource ID and expected format
-    std::string filePath = "textures/" + GetId() + ".png";
+    std::string filePath = "assets/textures/" + GetId() + ".png";
 
     // Step 2b: Load raw image data from disk with format detection
     unsigned char* data = LoadImageData(filePath, &m_Width, &m_Height, &m_Channels);

@@ -24,6 +24,8 @@ public:
         vk::ImageUsageFlags usage,
         vk::MemoryPropertyFlags properties);
 
+    static vk::raii::ImageView CreateImageView(vk::Image const &image, uint32_t mipLevels, vk::Format format, vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor);
+
     static void TransitionImageLayout(const vk::raii::Image& image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t mipLevels);
     static void CopyBufferToImage(const vk::raii::Buffer& buffer, vk::raii::Image& image, uint32_t width, uint32_t height);
 

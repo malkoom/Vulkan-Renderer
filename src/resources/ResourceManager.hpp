@@ -18,106 +18,106 @@ class ResourceHandle;
 // Resource manager
 class ResourceManager {
 private:
-    // Two-level storage system: organize by type first, then by unique identifier
-    // This approach enables type-safe resource access while maintaining efficient lookup
-    std::unordered_map<std::type_index,
-                       std::unordered_map<std::string, std::shared_ptr<Resource>>> resources;
-
-    // Two-level reference counting system for automatic resource lifecycle management
-    // First level maps resource type, second level maps resource IDs to their data
-    struct ResourceData {
-        std::shared_ptr<Resource> resource;  // The actual resource
-        int refCount;                        // Reference count for this resource
+    // Estructura única para evitar duplicar mapas redundantes
+    struct ResourceEntry {
+        std::shared_ptr<Resource> resource;
+        int refCount = 0;
     };
-    std::unordered_map<std::type_index,
-                       std::unordered_map<std::string, ResourceData>> refCounts;
+
+    // Un único mapa maestro de dos niveles: Tipo -> (ID -> Datos del Recurso)
+    std::unordered_map<std::type_index, std::unordered_map<std::string, ResourceEntry>> m_Resources;
 
 public:
+    ~ResourceManager()
+    {
+        UnloadAll();
+    }
     template<typename T>
     ResourceHandle<T> Load(const std::string& resourceId) {
         static_assert(std::is_base_of<Resource, T>::value, "T must derive from Resource");
 
-        // Step 3a: Check existing resource cache to avoid redundant loading
-        auto& typeResources = resources[std::type_index(typeid(T))];
-        auto it = typeResources.find(resourceId);
+        std::type_index typeIdx(typeid(T));
+        auto& typeMap = m_Resources[typeIdx];
+        auto it = typeMap.find(resourceId);
 
-        if (it != typeResources.end()) {
-            // Resource exists in cache - increment reference count and return handle
-            refCounts[resourceId]++;
+        // Si ya está en la caché
+        if (it != typeMap.end()) {
+            it->second.refCount++;
             return ResourceHandle<T>(resourceId, this);
         }
 
-        // Step 3b: Create new resource instance and attempt loading
+        // Si es nuevo, lo creamos
         auto resource = std::make_shared<T>(resourceId);
         if (!resource->Load()) {
-            // Loading failed - return invalid handle rather than corrupting cache
-            return ResourceHandle<T>();
+            return ResourceHandle<T>(); // Invalid handle
         }
 
-        // Step 3c: Cache successful resource and initialize reference tracking
-        typeResources[resourceId] = resource;
-        refCounts[resourceId] = 1;
+        // Guardamos en la caché única
+        typeMap[resourceId] = ResourceEntry{ resource, 1 };
 
         return ResourceHandle<T>(resourceId, this);
     }
 
     template<typename T>
     T* GetResource(const std::string& resourceId) {
-        // Access type-specific resource container using compile-time type information
-        auto& typeResources = resources[std::type_index(typeid(T))];
-        auto it = typeResources.find(resourceId);
+        std::type_index typeIdx(typeid(T));
+        auto typeIt = m_Resources.find(typeIdx);
 
-        if (it != typeResources.end()) {
-            // Resource found - perform safe downcast and return typed pointer
-            return static_cast<T*>(it->second.get());
+        if (typeIt != m_Resources.end()) {
+            auto& typeMap = typeIt->second;
+            auto it = typeMap.find(resourceId);
+            if (it != typeMap.end()) {
+                return static_cast<T*>(it->second.resource.get());
+            }
         }
-
-        // Resource not found - return null for safe handling by caller
         return nullptr;
     }
 
     template<typename T>
-    bool HasResource(const std::string& resourceId) {
-        // Efficient existence check without resource access overhead
-        auto resourceIt = resources.find(std::type_index(typeid(T)));
-        auto map = resourceIt->second;
-        auto mapIt = map.find(resourceId);
-        return mapIt != map.end();
+    bool HasResource(const std::string& resourceId) const {
+        std::type_index typeIdx(typeid(T));
+        auto typeIt = m_Resources.find(typeIdx);
+
+        if (typeIt == m_Resources.end()) {
+            return false; // El tipo ni siquiera se ha registrado
+        }
+
+        const auto& typeMap = typeIt->second; // Acceso seguro por referencia constante
+        return typeMap.find(resourceId) != typeMap.end();
     }
 
+    // El Release ahora necesita saber el tipo para ser ultra rápido (O(1) en vez de buscar en bucles)
+    template<typename T>
     void Release(const std::string& resourceId) {
-        // Locate reference count entry for this resource
-        auto it = refCounts.find(resourceId);
-        if (it != refCounts.end()) {
-            it->second--;
+        std::type_index typeIdx(typeid(T));
+        auto typeIt = m_Resources.find(typeIdx);
 
-            // Check if resource has no remaining references
-            if (it->second <= 0) {
-                // Step 5a: Locate and unload the unreferenced resource across all type containers
-                for (auto& [type, typeResources] : resources) {
-                    auto resourceIt = typeResources.find(resourceId);
-                    if (resourceIt != typeResources.end()) {
-                        resourceIt->second->Unload();      // Allow resource to clean up its data
-                        typeResources.erase(resourceIt);   // Remove from cache
-                        break;
-                    }
+        if (typeIt != m_Resources.end()) {
+            auto& typeMap = typeIt->second;
+            auto it = typeMap.find(resourceId);
+
+            if (it != typeMap.end()) {
+                it->second.refCount--;
+
+                // Si ya nadie lo referencia, limpieza automática de VRAM/RAM
+                if (it->second.refCount <= 0) {
+                    it->second.resource->Unload();
+                    typeMap.erase(it);
                 }
-
-                // Step 5b: Clean up reference counting entry
-                refCounts.erase(it);
             }
         }
     }
 
     void UnloadAll() {
-        // Emergency cleanup method for system shutdown or major state changes
-        for (auto& [type, typeResources] : resources) {
-            for (auto& [id, resource] : typeResources) {
-                resource->Unload();     // Ensure all resources clean up properly
+        for (auto& [type, typeMap] : m_Resources) {
+            for (auto& [id, entry] : typeMap) {
+                if (entry.resource) {
+                    entry.resource->Unload();
+                }
             }
-            typeResources.clear();      // Clear type-specific containers
+            typeMap.clear();
         }
-        refCounts.clear();              // Reset all reference counts
+        m_Resources.clear();
     }
 };
 

@@ -40,6 +40,10 @@ public:
         Unload();                 // Ensure proper cleanup when object is destroyed
     }
 
+    const vk::raii::Image* GetImage() const { return &m_Image;}
+    const vk::raii::ImageView* GetImageView() const { return &m_ImageView;}
+    const vk::raii::Sampler* GetSampler() const { return &m_Sampler;}
+
 protected:
     bool doLoad() override;
     bool doUnload() override;
