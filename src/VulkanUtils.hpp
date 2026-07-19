@@ -31,10 +31,9 @@ public:
 
     static vk::raii::CommandBuffer BeginSingleTimeCommands();
     static void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer);
+    static uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 
 private:
-    // Función auxiliar interna para los comandos de un solo uso
-    static uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 };
 
 #endif //VULKANENGINE_VULKANUTILS_HPP

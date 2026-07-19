@@ -63,7 +63,9 @@ else()
           src/GameObject.hpp
           src/resources/Texture.hpp
           src/services/GraphicsServices.hpp
-          src/VulkanUtils.hpp)
+          src/VulkanUtils.hpp
+          src/rendergraph/RenderGraph.cpp
+          src/rendergraph/RenderGraph.hpp)
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
   target_link_libraries(VulkanCppModule INTERFACE Vulkan::Vulkan)
   target_compile_definitions(VulkanCppModule
