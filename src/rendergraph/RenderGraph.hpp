@@ -1,74 +1,79 @@
-//
-// Created by marc on 19/7/26.
-//
-
-#ifndef VULKANENGINE_RENDERGRAPH_HPP
-#define VULKANENGINE_RENDERGRAPH_HPP
+// RenderGraph.hpp
+#pragma once
 
 #include <vulkan/vulkan_raii.hpp>
+#include <string>
+#include <vector>
+#include <unordered_map>
 #include <functional>
+#include <memory>
 
-// A comprehensive rendergraph implementation for automated dependency management
 class RenderGraph {
-    private:
-    // Resource description and management structure
-    // Represents Image resource used during rendering (render textures)
+public:
     struct Resource {
-        std::string name;                     // Human-readable identifier for debugging and referencing
-        vk::Format format;                    // Pixel format (RGBA8, Depth24Stencil8, etc.)
-        vk::Extent2D extent;                  // Dimensions in pixels for 2D resources
-        vk::ImageUsageFlags usage;            // How this resource will be used (color attachment, texture, etc.)
-        vk::ImageLayout initialLayout;        // Expected layout when the frame begins
-        vk::ImageLayout finalLayout;          // Required layout when the frame ends
+        std::string name;
+        vk::Format format;
+        vk::Extent2D extent;
+        vk::ImageUsageFlags usage;
+        vk::ImageLayout initialLayout;
+        vk::ImageLayout finalLayout;
 
-        // Actual GPU resources - populated during compilation
-        vk::raii::Image image = nullptr;      // The GPU image object
-        vk::raii::DeviceMemory memory = nullptr;  // Backing memory allocation
-        vk::raii::ImageView view = nullptr;   // Shader-accessible view of the image
+        vk::raii::Image image = nullptr;
+        vk::raii::DeviceMemory memory = nullptr;
+        vk::raii::ImageView view = nullptr;
     };
 
-    // Render pass representation within the graph structure
-    // Each pass represents a distinct rendering operation with defined inputs and outputs
     struct Pass {
-        std::string name;                     // Descriptive name for debugging and profiling
-        std::vector<std::string> inputs;      // Resources this pass reads from (dependencies)
-        std::vector<std::string> outputs;     // Resources this pass writes to (products)
-        std::function<void(vk::raii::CommandBuffer&)> executeFunc;  // The actual rendering code
+        std::string name;
+        std::vector<std::string> inputs;
+        std::vector<std::string> outputs;
+        std::function<void(vk::raii::CommandBuffer&)> executeFunc;
     };
 
-    // Core data storage for the rendergraph system
-    std::unordered_map<std::string, Resource> resources;  // All resources referenced in the graph
-    std::vector<Pass> passes;                             // All rendering passes in definition order
-    std::vector<size_t> executionOrder;                   // Computed optimal execution sequence
+private:
+    const vk::raii::Device& m_Device;
+    uint32_t m_MaxFramesInFlight;
+    size_t m_FrameIndex = 0;
+    bool m_FramebufferResized = false;
 
-    // Automatic synchronization management
-    // These objects ensure correct GPU execution order without manual barriers
-    std::vector<vk::raii::Semaphore> semaphores;          // GPU synchronization primitives
-    std::vector<std::pair<size_t, size_t>> semaphoreSignalWaitPairs;  // (signaling pass, waiting pass)
+    // Almacenamiento global de recursos y pases
+    std::unordered_map<std::string, Resource> m_Resources;
+    std::vector<Pass> m_Passes;
 
-    vk::raii::Device& device;  // Vulkan device for resource creation
+    // Estructuras calculadas durante Compile()
+    std::vector<size_t> m_ExecutionOrder;
+    std::vector<vk::raii::Semaphore> m_Semaphores;
+    std::vector<std::pair<size_t, size_t>> m_SemaphoreSignalWaitPairs; // (Productor, Consumidor)
+
+    // Sincronización de la Swapchain / Frames en Vuelo
+    std::vector<vk::raii::Semaphore> m_ImageAvailableSemaphores;
+    std::vector<vk::raii::Semaphore> m_RenderFinishedSemaphores;
+    std::vector<vk::raii::Fence>     m_InFlightFences;
 
 public:
-    explicit RenderGraph(vk::raii::Device& dev) : device(dev) {}
+    RenderGraph(const vk::raii::Device& device, uint32_t maxFramesInFlight);
+    ~RenderGraph() = default;
 
-    // Resource registration interface for declaring all resources used during rendering
-    // This method establishes resource metadata without creating actual GPU resources
+    // Configuración de la topología
     void AddResource(const std::string& name, vk::Format format, vk::Extent2D extent,
-                    vk::ImageUsageFlags usage, vk::ImageLayout initialLayout,
-                    vk::ImageLayout finalLayout);
+                    vk::ImageUsageFlags usage, vk::ImageLayout initialLayout, vk::ImageLayout finalLayout);
 
-    // Pass registration interface for defining rendering operations and their dependencies
-    // This method establishes the logical structure of rendering without immediate execution
-    void AddPass(const std::string& name,
-                const std::vector<std::string>& inputs,
-                const std::vector<std::string>& outputs,
-                std::function<void(vk::raii::CommandBuffer&)> executeFunc);
+    void AddPass(const std::string& name, const std::vector<std::string>& inputs,
+                 const std::vector<std::string>& outputs, std::function<void(vk::raii::CommandBuffer&)> executeFunc);
 
-    // Rendergraph compilation - transforms declarative descriptions into executable pipeline
-    // This method performs dependency analysis, resource allocation, and execution planning
+    // Compilación del grafo y reserva de memoria física
     void Compile();
 
+    // Invocación por frame
+    void Execute(vk::raii::CommandBuffer& commandBuffer, vk::Queue queue,
+                 uint32_t imageIndex, vk::Semaphore imageAvailable, vk::Semaphore renderFinished);
+
+    void RenderFrame(vk::Queue& graphicsQueue, vk::raii::SwapchainKHR& swapchain,
+                     const std::vector<vk::raii::CommandBuffer>& commandBuffers,
+                     std::function<void(uint32_t frameIdx)> updateUBOFunc,
+                     std::function<void()> recreateSwapchainFunc);
+
+    // Acceso a recursos
+    Resource* GetResource(const std::string& name);
+    void SetFramebufferResized(bool resized) { m_FramebufferResized = resized; }
 };
-
-
-#endif //VULKANENGINE_RENDERGRAPH_HPP

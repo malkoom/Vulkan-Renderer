@@ -1,149 +1,335 @@
-//
-// Created by marc on 19/7/26.
-//
-
+// RenderGraph.cpp
 #include "RenderGraph.hpp"
+#include "../services/GraphicsServices.hpp"
 #include "../VulkanUtils.hpp"
 
-void RenderGraph::AddResource(const std::string &name, vk::Format format, vk::Extent2D extent,
-    vk::ImageUsageFlags usage, vk::ImageLayout initialLayout, vk::ImageLayout finalLayout)
-{
-    Resource resource;
-    resource.name = name;                    // Store human-readable identifier
-    resource.format = format;                // Define pixel format and bit depth
-    resource.extent = extent;                // Set resource dimensions
-    resource.usage = usage;                  // Specify intended usage patterns
-    resource.initialLayout = initialLayout; // Define starting layout state
-    resource.finalLayout = finalLayout;     // Define required ending state
+#include <stdexcept>
+#include <cassert>
 
-    resources[name] = std::move(resource);  // Register in the global resource map
+RenderGraph::RenderGraph(const vk::raii::Device& device, uint32_t maxFramesInFlight)
+    : m_Device(device), m_MaxFramesInFlight(maxFramesInFlight)
+{
+    // Creación de objetos de sincronización para el bucle de renderizado
+    for (size_t i = 0; i < m_MaxFramesInFlight; ++i) {
+        m_ImageAvailableSemaphores.emplace_back(m_Device, vk::SemaphoreCreateInfo{});
+        m_InFlightFences.emplace_back(m_Device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+    }
 }
 
-void RenderGraph::AddPass(const std::string &name, const std::vector<std::string> &inputs,
-    const std::vector<std::string> &outputs, std::function<void(vk::raii::CommandBuffer &)> executeFunc)
+void RenderGraph::AddResource(const std::string& name, vk::Format format, vk::Extent2D extent,
+                              vk::ImageUsageFlags usage, vk::ImageLayout initialLayout, vk::ImageLayout finalLayout)
+{
+    Resource resource;
+    resource.name = name;
+    resource.format = format;
+    resource.extent = extent;
+    resource.usage = usage;
+    resource.initialLayout = initialLayout;
+    resource.finalLayout = finalLayout;
+
+    m_Resources[name] = std::move(resource);
+}
+
+void RenderGraph::AddPass(const std::string& name, const std::vector<std::string>& inputs,
+                          const std::vector<std::string>& outputs, std::function<void(vk::raii::CommandBuffer&)> executeFunc)
 {
     Pass pass;
-    pass.name = name;                          // Assign descriptive identifier
-    pass.inputs = inputs;                      // List all resources this pass reads
-    pass.outputs = outputs;                    // List all resources this pass writes
-    pass.executeFunc = std::move(executeFunc); // Store the actual rendering implementation
+    pass.name = name;
+    pass.inputs = inputs;
+    pass.outputs = outputs;
+    pass.executeFunc = std::move(executeFunc);
 
-    passes.push_back(pass);                  // Add to the ordered pass list
+    m_Passes.push_back(pass);
 }
 
 void RenderGraph::Compile()
 {
-    // Dependency Graph Construction
-    // Build bidirectional dependency relationships between passes
-    std::vector<std::vector<size_t>> dependencies(passes.size());  // What each pass depends on
-    std::vector<std::vector<size_t>> dependents(passes.size());    // What depends on each pass
+    m_ExecutionOrder.clear();
+    m_Semaphores.clear();
+    m_SemaphoreSignalWaitPairs.clear();
 
-    // Track which pass produces each resource (write-after-write dependencies)
+    // 1. Descubrimiento de Dependencias
+    std::vector<std::vector<size_t>> dependencies(m_Passes.size());
+    std::vector<std::vector<size_t>> dependents(m_Passes.size());
     std::unordered_map<std::string, size_t> resourceWriters;
 
-    // Dependency Discovery Through Resource Usage Analysis
-    // Analyze each pass to determine data flow relationships
-    for (size_t i = 0; i < passes.size(); ++i) {
-        const auto& pass = passes[i];
+    for (size_t i = 0; i < m_Passes.size(); ++i) {
+        const auto& pass = m_Passes[i];
 
-        // Process input dependencies - this pass must wait for producers
         for (const auto& input : pass.inputs) {
             auto it = resourceWriters.find(input);
             if (it != resourceWriters.end()) {
-                // Found the pass that produces this input - create dependency link
-                dependencies[i].push_back(it->second);      // This pass depends on the producer
-                dependents[it->second].push_back(i);        // Producer has this as dependent
+                dependencies[i].push_back(it->second);
+                dependents[it->second].push_back(i);
             }
         }
 
-        // Register output production - subsequent passes may depend on these
         for (const auto& output : pass.outputs) {
-            resourceWriters[output] = i;                    // Record this pass as producer
+            resourceWriters[output] = i;
         }
     }
 
-    // Topological Sort for Optimal Execution Order
-    // Use depth-first search to compute valid execution sequence while detecting cycles
-    std::vector<bool> visited(passes.size(), false);       // Track completed nodes
-    std::vector<bool> inStack(passes.size(), false);       // Track current recursion path
+    // 2. Ordenamiento Topológico y Detección de Ciclos (DFS)
+    std::vector<bool> visited(m_Passes.size(), false);
+    std::vector<bool> inStack(m_Passes.size(), false);
 
     std::function<void(size_t)> visit = [&](size_t node) {
         if (inStack[node]) {
-            // Cycle detection - circular dependency found
-            throw std::runtime_error("Cycle detected in rendergraph");
+            throw std::runtime_error("Cycle detected in RenderGraph!");
         }
+        if (visited[node]) return;
 
-        if (visited[node]) {
-            return;  // Already processed this node and its dependencies
+        inStack[node] = true;
+        for (auto dependent : dependents[node]) {
+            visit(dependent);
         }
-
-        inStack[node] = true;   // Mark as currently being processed
-
-            // Recursively process all dependent passes first (post-order traversal)
-            for (auto dependent : dependents[node]) {
-                visit(dependent);
-            }
-
-        inStack[node] = false;  // Remove from current path
-        visited[node] = true;   // Mark as completely processed
-        executionOrder.push_back(node);  // Add to execution sequence
+        inStack[node] = false;
+        visited[node] = true;
+        m_ExecutionOrder.push_back(node);
     };
 
-    // Process all unvisited nodes to handle disconnected graph components
-    for (size_t i = 0; i < passes.size(); ++i) {
-        if (!visited[i]) {
-            visit(i);
-        }
+    for (size_t i = 0; i < m_Passes.size(); ++i) {
+        if (!visited[i]) visit(i);
     }
 
-    // Automatic Synchronization Object Creation
-    // Generate semaphores for all dependencies identified during analysis
-    for (size_t i = 0; i < passes.size(); ++i) {
+    // 3. Creación Autómata de Semáforos Inter-pase
+    for (size_t i = 0; i < m_Passes.size(); ++i) {
         for (auto dep : dependencies[i]) {
-            // Create a GPU semaphore for this dependency relationship
-            // The dependent pass will wait on this semaphore before executing
-            semaphores.emplace_back(device.createSemaphore({}));
-            semaphoreSignalWaitPairs.emplace_back(dep, i);    // (producer, consumer) pair
+            m_Semaphores.emplace_back(m_Device, vk::SemaphoreCreateInfo{});
+            m_SemaphoreSignalWaitPairs.emplace_back(dep, i);
         }
     }
 
-    // Physical Resource Allocation and Creation
-    // Transform resource descriptions into actual GPU objects
-    for (auto& [name, resource] : resources) {
-        // Configure image creation parameters based on resource description
-        vk::ImageCreateInfo imageInfo;
-        imageInfo.setImageType(vk::ImageType::e2D)                    // 2D texture/render target
-            .setFormat(resource.format)                          // Pixel format from description
-            .setExtent({resource.extent.width, resource.extent.height, 1})  // Dimensions
-            .setMipLevels(1)                                      // Single mip level for simplicity
-            .setArrayLayers(1)                                    // Single layer (not array texture)
-            .setSamples(vk::SampleCountFlagBits::e1)              // No multisampling
-            .setTiling(vk::ImageTiling::eOptimal)                 // GPU-optimal memory layout
-            .setUsage(resource.usage)                             // Usage flags from registration
-            .setSharingMode(vk::SharingMode::eExclusive)          // Single queue family access
-            .setInitialLayout(vk::ImageLayout::eUndefined);       // Initial layout (will be transitioned)
+    // 4. Asignación Física de Recursos en VRAM
+    for (auto& [name, resource] : m_Resources) {
+        vk::ImageCreateInfo imageInfo{
+            .imageType     = vk::ImageType::e2D,
+            .format        = resource.format,
+            .extent        = {resource.extent.width, resource.extent.height, 1},
+            .mipLevels     = 1,
+            .arrayLayers   = 1,
+            .samples       = vk::SampleCountFlagBits::e1,
+            .tiling        = vk::ImageTiling::eOptimal,
+            .usage         = resource.usage,
+            .sharingMode   = vk::SharingMode::eExclusive,
+            .initialLayout = vk::ImageLayout::eUndefined
+        };
 
-        resource.image = device.createImage(imageInfo);               // Create the GPU image object
+        resource.image = vk::raii::Image(m_Device, imageInfo);
 
-        // Allocate backing memory for the image
-        vk::MemoryRequirements memRequirements = resource.image.getMemoryRequirements();
+        vk::MemoryRequirements memReqs = resource.image.getMemoryRequirements();
+        vk::MemoryAllocateInfo allocInfo{
+            .allocationSize  = memReqs.size,
+            .memoryTypeIndex = VulkanUtils::FindMemoryType(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)
+        };
 
-        vk::MemoryAllocateInfo allocInfo;
-        allocInfo.setAllocationSize(memRequirements.size)             // Required memory size
-            .setMemoryTypeIndex(VulkanUtils::FindMemoryType(memRequirements.memoryTypeBits,
-            vk::MemoryPropertyFlagBits::eDeviceLocal));  // GPU-local memory
+        resource.memory = vk::raii::DeviceMemory(m_Device, allocInfo);
+        resource.image.bindMemory(*resource.memory, 0);
 
-        resource.memory = device.allocateMemory(allocInfo);           // Allocate GPU memory
-        resource.image.bindMemory(*resource.memory, 0);               // Bind memory to image
+        vk::ImageViewCreateInfo viewInfo{
+            .image    = *resource.image,
+            .viewType = vk::ImageViewType::e2D,
+            .format   = resource.format,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+        };
 
-        // Create image view for shader access
-        vk::ImageViewCreateInfo viewInfo;
-        viewInfo.setImage(*resource.image)                            // Reference the created image
-            .setViewType(vk::ImageViewType::e2D)                   // 2D view type
-            .setFormat(resource.format)                            // Match image format
-            .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});  // Full image access
+        resource.view = vk::raii::ImageView(m_Device, viewInfo);
+    }
+}
 
-        resource.view = device.createImageView(viewInfo);             // Create shader-accessible view
+void RenderGraph::Execute(vk::raii::CommandBuffer& commandBuffer, vk::Queue queue,
+                         uint32_t imageIndex, vk::Semaphore imageAvailable, vk::Semaphore renderFinished)
+{
+    std::vector<vk::Semaphore> waitSemaphores;
+    std::vector<vk::PipelineStageFlags> waitStages;
+    std::vector<vk::Semaphore> signalSemaphores;
+
+    size_t firstPassIdx = m_ExecutionOrder.front();
+    size_t lastPassIdx  = m_ExecutionOrder.back();
+
+    for (auto passIdx : m_ExecutionOrder) {
+        const auto& pass = m_Passes[passIdx];
+
+        waitSemaphores.clear();
+        waitStages.clear();
+        signalSemaphores.clear();
+
+        // Si es el primer pase, esperamos a que la Swapchain tenga la imagen lista
+        if (passIdx == firstPassIdx) {
+            waitSemaphores.push_back(imageAvailable);
+            waitStages.push_back(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+        }
+
+        // Recoger semáforos inter-pase (Consumidor)
+        for (size_t i = 0; i < m_SemaphoreSignalWaitPairs.size(); ++i) {
+            if (m_SemaphoreSignalWaitPairs[i].second == passIdx) {
+                waitSemaphores.push_back(*m_Semaphores[i]);
+                waitStages.push_back(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+            }
+        }
+
+        // Recoger semáforos inter-pase (Productor)
+        for (size_t i = 0; i < m_SemaphoreSignalWaitPairs.size(); ++i) {
+            if (m_SemaphoreSignalWaitPairs[i].first == passIdx) {
+                signalSemaphores.push_back(*m_Semaphores[i]);
+            }
+        }
+
+        // Si es el último pase, avisamos al semáforo de presentación
+        if (passIdx == lastPassIdx) {
+            signalSemaphores.push_back(renderFinished);
+        }
+
+        // Grabación de Comandos
+        commandBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+        // Barriadas de Entrada (ShaderRead)
+        for (const auto& input : pass.inputs) {
+            auto& resource = m_Resources[input];
+            vk::ImageMemoryBarrier barrier{
+                .srcAccessMask       = vk::AccessFlagBits::eMemoryWrite,
+                .dstAccessMask       = vk::AccessFlagBits::eShaderRead,
+                .oldLayout           = resource.initialLayout,
+                .newLayout           = vk::ImageLayout::eShaderReadOnlyOptimal,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image               = *resource.image,
+                .subresourceRange    = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+            };
+
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::PipelineStageFlagBits::eFragmentShader,
+                vk::DependencyFlagBits::eByRegion, {}, {}, barrier
+            );
+        }
+
+        // Barriadas de Salida (ColorAttachment)
+        for (const auto& output : pass.outputs) {
+            auto& resource = m_Resources[output];
+            vk::ImageMemoryBarrier barrier{
+                .srcAccessMask       = vk::AccessFlagBits::eMemoryRead,
+                .dstAccessMask       = vk::AccessFlagBits::eColorAttachmentWrite,
+                .oldLayout           = resource.initialLayout,
+                .newLayout           = vk::ImageLayout::eColorAttachmentOptimal,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image               = *resource.image,
+                .subresourceRange    = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+            };
+
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                vk::DependencyFlagBits::eByRegion, {}, {}, barrier
+            );
+        }
+
+        // Ejecutar Lambda del Pase
+        pass.executeFunc(commandBuffer);
+
+        // Barriadas Finales
+        for (const auto& output : pass.outputs) {
+            auto& resource = m_Resources[output];
+            vk::ImageMemoryBarrier barrier{
+                .srcAccessMask       = vk::AccessFlagBits::eColorAttachmentWrite,
+                .dstAccessMask       = vk::AccessFlagBits::eMemoryRead,
+                .oldLayout           = vk::ImageLayout::eColorAttachmentOptimal,
+                .newLayout           = resource.finalLayout,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image               = *resource.image,
+                .subresourceRange    = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+            };
+
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::DependencyFlagBits::eByRegion, {}, {}, barrier
+            );
+        }
+
+        commandBuffer.end();
+
+        // Enviar al Queue
+        vk::SubmitInfo submitInfo{
+            .waitSemaphoreCount   = static_cast<uint32_t>(waitSemaphores.size()),
+            .pWaitSemaphores      = waitSemaphores.data(),
+            .pWaitDstStageMask    = waitStages.data(),
+            .commandBufferCount   = 1,
+            .pCommandBuffers      = &*commandBuffer,
+            .signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size()),
+            .pSignalSemaphores    = signalSemaphores.data()
+        };
+
+        // Solo señalamos la Fence de CPU en el ÚLTIMO pase
+        vk::Fence fenceToSignal = (passIdx == lastPassIdx) ? *m_InFlightFences[m_FrameIndex] : nullptr;
+        queue.submit(submitInfo, fenceToSignal);
+    }
+}
+
+void RenderGraph::RenderFrame(vk::Queue& graphicsQueue, vk::raii::SwapchainKHR& swapchain,
+                             const std::vector<vk::raii::CommandBuffer>& commandBuffers,
+                             std::function<void(uint32_t frameIdx)> updateUBOFunc,
+                             std::function<void()> recreateSwapchainFunc)
+{
+    // 1. Esperar a la GPU para este Frame en Vuelo
+    auto fenceResult = m_Device.waitForFences(*m_InFlightFences[m_FrameIndex], vk::True, UINT64_MAX);
+    if (fenceResult != vk::Result::eSuccess) {
+        throw std::runtime_error("Failed to wait for fence!");
     }
 
+    // 2. Adquirir Imagen de la Swapchain
+    // Creamos dinámicamente el semáforo de render finished por imagen de swapchain si es necesario
+    if (m_RenderFinishedSemaphores.size() < swapchain.getImages().size()) {
+        m_RenderFinishedSemaphores.clear();
+        for (size_t i = 0; i < swapchain.getImages().size(); ++i) {
+            m_RenderFinishedSemaphores.emplace_back(m_Device, vk::SemaphoreCreateInfo{});
+        }
+    }
+
+    auto [result, imageIndex] = swapchain.acquireNextImage(UINT64_MAX, *m_ImageAvailableSemaphores[m_FrameIndex], nullptr);
+
+    if (result == vk::Result::eErrorOutOfDateKHR) {
+        recreateSwapchainFunc();
+        return;
+    }
+
+    m_Device.resetFences(*m_InFlightFences[m_FrameIndex]);
+
+    // 3. Actualizar Transformaciones / UBOs
+    updateUBOFunc(m_FrameIndex);
+
+    // 4. Delegar la Ejecución Completa al Grafo
+    Execute(
+        const_cast<vk::raii::CommandBuffer&>(commandBuffers[m_FrameIndex]),
+        graphicsQueue,
+        imageIndex,
+        *m_ImageAvailableSemaphores[m_FrameIndex],
+        *m_RenderFinishedSemaphores[imageIndex]
+    );
+
+    // 5. Presentación Final
+    vk::PresentInfoKHR presentInfo{
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores    = &*m_RenderFinishedSemaphores[imageIndex],
+        .swapchainCount     = 1,
+        .pSwapchains        = &*swapchain,
+        .pImageIndices      = &imageIndex
+    };
+
+    result = graphicsQueue.presentKHR(presentInfo);
+
+    if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR || m_FramebufferResized) {
+        m_FramebufferResized = false;
+        recreateSwapchainFunc();
+    }
+
+    m_FrameIndex = (m_FrameIndex + 1) % m_MaxFramesInFlight;
+}
+
+RenderGraph::Resource* RenderGraph::GetResource(const std::string& name)
+{
+    auto it = m_Resources.find(name);
+    return (it != m_Resources.end()) ? &it->second : nullptr;
 }
