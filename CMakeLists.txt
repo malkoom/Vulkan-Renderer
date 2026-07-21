@@ -65,7 +65,11 @@ else()
           src/services/GraphicsServices.hpp
           src/VulkanUtils.hpp
           src/rendergraph/RenderGraph.cpp
-          src/rendergraph/RenderGraph.hpp)
+          src/rendergraph/RenderGraph.hpp
+          src/vkcore/Swapchain.cpp
+          src/vkcore/Swapchain.hpp
+          src/vkcore/Context.cpp
+          src/vkcore/Context.hpp)
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
   target_link_libraries(VulkanCppModule INTERFACE Vulkan::Vulkan)
   target_compile_definitions(VulkanCppModule
